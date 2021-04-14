@@ -49,7 +49,7 @@ class lawScrapper:
     docName=""
     resultsNum=0
     topTitle="Recitals"
-    currentBookNum=1
+    currentBookNum=0
     styles = getSampleStyleSheet()
     port = 465  # For SSL
     excelNum=0
@@ -100,6 +100,7 @@ class lawScrapper:
         a=driver.find_element_by_xpath("//a[text()='Search in legal acts']")
         driver.execute_script("arguments[0].click();", a)
         driver.find_element_by_xpath("//input[@id='legInForce']").click()
+        driver.find_element_by_xpath("//input[@id='excCorr']").click()
         driver.find_element_by_xpath("//input[@id='typeOfActStatusRegulation']").click()
         driver.find_element_by_xpath("//input[@id='topSearch']").click()
         self.resultsNum=int(driver.find_elements_by_tag_name("strong")[5].text)
@@ -110,45 +111,67 @@ class lawScrapper:
         select.select_by_index(1)
         a=driver.find_element_by_xpath("//button[text()='Display']")
         driver.execute_script("arguments[0].click();", a)
+        Errorkbook = xlsxwriter.Workbook(self.path+'excel\\Errors.xlsx')
+        errorsheet = Errorkbook.add_worksheet()
+        errorRow=1
+        errorsheet.write(0,0,"Doc Number")
+        errorsheet.write(0,1,"Languages")
+        errorsheet.write(0,2,"Reason")
         for i in range(1,self.resultsNum+1):
-            self.currentBookNum=i
             try:
-                if i%100==1:
-                    workbook = xlsxwriter.Workbook(self.path+'excel\\'+str(self.excelNum)+'.xlsx')
-                    worksheet = workbook.add_worksheet()
-                    columnNames=['Interior File Path','Cover File Path','Title','Subtitle','Author - Prefix','Author - First Name','Author - Middle Name','Author - Last Name','Author - Suffix', 'Description','Keyword #1','Keyword #2','Keyword #3','Keyword #4','Keyword #5','Keyword #6','Keyword #7','Price','Category #1','Category #2','Primary Marketplace','Expanded Distribution', 'Round Price To#.99 After VAT' ]
-                    row=0
-                    for item in columnNames:
-                        worksheet.write(0,row,item)
-                        row+=1
-
                 select = Select(driver.find_element_by_id('MDLang2'))
                 for j in range(0,len(select.options)):
-                    select = Select(driver.find_element_by_id('MDLang2'))
-                    select.select_by_index(j)
-                    selected_option = select.first_selected_option
-                    self.lang=selected_option.text.split(" ")[0]
-                    self.articleNum=[]
-                    self.engTitle=""
-                    self.otherTitle=""
-                    self.coverSubTitle=[]
-                    self.coverTitle=[]
-                    self.topTitle="Recitals"
-                    if self.lang!="English":
-                        a=driver.find_element_by_xpath("//button[text()='Display']")
-                        driver.execute_script("arguments[0].click();", a)
-                        result=self.getStarted(driver)
+                    try:
+                        if self.currentBookNum%100==0:
+                            print("creating excel number:" + str(self.excelNum)) 
+                            workbook = xlsxwriter.Workbook(self.path+'excel\\'+str(self.excelNum)+'.xlsx')
+                            worksheet = workbook.add_worksheet()
+                            columnNames=['Interior File Path','Cover File Path','Title','Subtitle','Author - Prefix','Author - First Name','Author - Middle Name','Author - Last Name','Author - Suffix', 'Description','Keyword #1','Keyword #2','Keyword #3','Keyword #4','Keyword #5','Keyword #6','Keyword #7','Price','Category #1','Category #2','Primary Marketplace','Expanded Distribution', 'Round Price To#.99 After VAT' ]
+                            col=0
+                            for item in columnNames:
+                                worksheet.write(0,col,item)
+                                col+=1
+                        select = Select(driver.find_element_by_id('MDLang2'))
+                        select.select_by_index(j)
+                        selected_option = select.first_selected_option
+                        self.lang=selected_option.text.split(" ")[0]
+                        self.articleNum=[]
+                        self.engTitle=""
+                        self.otherTitle=""
+                        self.coverSubTitle=[]
+                        self.coverTitle=[]
+                        self.topTitle="Recitals"
+                        if self.lang!="English":
+                            a=driver.find_element_by_xpath("//button[text()='Display']")
+                            driver.execute_script("arguments[0].click();", a)
+                            result,message=self.getStarted(driver) 
+                            if result==True:
+                                self.currentBookNum+=1
+                                self.addRowtoExcel(worksheet)
+                                print(self.currentBookNum, self.currentBookNum%100, self.currentBookNum%100==0)
+                                if self.currentBookNum%100==0:
+                                    print("Closing the Excel and sending an email ...")
+                                    workbook.close()
+                                    self.sendEmail("Excel","Excel number {} is ready to be uploaded.".format(str(self.excelNum)))
+                                    self.excelNum+=1
+                            else:
+                                errorsheet.write(errorRow,0,self.docName)
+                                errorsheet.write(errorRow,1,"English -"+self.lang)
+                                errorsheet.write(errorRow,2,str(message))
+                                errorRow+=1
+                                
+                    except Exception as e:
+                        text="""{} after English - {} failed to be published, because of the following exception error:\n
+                    {}""".format(self.docName,self.lang, str(e))
+                        self.sendEmail("EXCEPTION ERROR",str(e))
+                        
                 a=driver.find_element_by_xpath("//span[text()='Next']")
                 driver.execute_script("arguments[0].click();", a)
 
-                if result==True:
-                    self.addRowtoExcel(worksheet)
-                    if i%100==0:
-                        workbook.close()
-                        self.sendEmail("Success","Excel number {} is ready to be uploaded.".format(self.excelNum))
-                        self.excelNum+=1
+
             except Exception as e:
-                self.sendEmail("Last ERROR",str(e))
+                self.sendEmail("EXCEPTION ERROR",str(e))
+                Errorkbook.close()
                 break
 
         self.sendEmail("Success","Done downloading the books")
@@ -160,39 +183,41 @@ class lawScrapper:
         page_soup = BeautifulSoup(driver.page_source, "html.parser")
         self.docName=page_soup.findAll('h1',{"class":"DocumentTitle"})[0].getText().replace(u'\xa0', u' ')
         found= page_soup.findAll("table",{"class":"table-responsive"})
-        result=self.createPDF(found)
+        result,message=self.createPDF(found)
+        return (result,message)
     
     def addRowtoExcel(self, worksheet):
-        Description="""We have 24 official languages in the European Union. English remains an official EU language even after Brexit.
-European legislation is subject to interpretation. Due to the variety of language versions, there are a number of linguistic differences. The book series "European Union Law - The Bilingual Editions" intends to allow multiple linguistic versions to be used for interpretation.
-Therefore, in our book series, the English legal texts are published in addition to a second language version to enable simple comparison of European legal provisions and make interpretation easier."""
-        worksheet.write(((self.currentBookNum-1)%100+1),0,"files\\"+self.docName+"English-"+self.lang+".pdf" )
-        worksheet.write(((self.currentBookNum-1)%100+1),1,"covers\\"+self.docName+"English-"+self.lang+".pdf" )
-        worksheet.write(((self.currentBookNum-1)%100+1),2,self.engTitle )
-        worksheet.write(((self.currentBookNum-1)%100+1),3,self.otherTitle )
+        Description="""<h1>European Union Law - The Bilingual Editions</h1>
+<p>We have 24 official languages in the European Union. English remains an official EU language even after Brexit.</p>
+<p>European legislation is subject to interpretation. Due to the variety of language versions, there are a number of linguistic differences. The book series "European Union Law - The Bilingual Editions" intends to allow multiple linguistic versions to be used for interpretation.</p>
+<p>Therefore, in our book series, the English legal texts are published in addition to a second language version to enable a simple comparison of European legal provisions and make interpretation easier.</p>"""
+        worksheet.write(((self.currentBookNum-1)%100+1),0,self.path+"files\\"+self.docName+"English-"+self.lang+".pdf" )
+        worksheet.write(((self.currentBookNum-1)%100+1),1,self.path+"covers\\"+self.docName+"English-"+self.lang+".pdf" )
+        worksheet.write(((self.currentBookNum-1)%100+1),2,"English - "+self.lang+" | "+self.coverTitle[0]+" "+self.coverTitle[2] )
+        worksheet.write(((self.currentBookNum-1)%100+1),3,"English - "+self.lang+" | "+self.coverTitle[1]+" "+self.coverTitle[3] )
         worksheet.write(((self.currentBookNum-1)%100+1),5,"Heiko" )
         worksheet.write(((self.currentBookNum-1)%100+1),6,"Jonny" )
         worksheet.write(((self.currentBookNum-1)%100+1),7,"Maniero" )
-        worksheet.write(((self.currentBookNum-1)%100+1),8,Description )
-        worksheet.write(((self.currentBookNum-1)%100+1),9,self.engTitle )
-        worksheet.write(((self.currentBookNum-1)%100+1),10,self.otherTitle )
-        worksheet.write(((self.currentBookNum-1)%100+1),11,self.coverSubTitle[0])
-        worksheet.write(((self.currentBookNum-1)%100+1),12,self.coverSubTitle[1] )
-        worksheet.write(((self.currentBookNum-1)%100+1),13,"European law" )
-        worksheet.write(((self.currentBookNum-1)%100+1),14,"EU law" )
-        worksheet.write(((self.currentBookNum-1)%100+1),15,"EU Regulation" )
-        worksheet.write(((self.currentBookNum-1)%100+1),16,7.99 )
-        worksheet.write(((self.currentBookNum-1)%100+1),17,"Nonfiction > Law > Civil Law" )
-        worksheet.write(((self.currentBookNum-1)%100+1),18,"Nonfiction > Law > International" )
-        worksheet.write(((self.currentBookNum-1)%100+1),17,"Amazon.de" )
-        worksheet.write(((self.currentBookNum-1)%100+1),17,"YES" )
-        worksheet.write(((self.currentBookNum-1)%100+1),17,"YES" )
+        worksheet.write(((self.currentBookNum-1)%100+1),9,Description )
+        worksheet.write(((self.currentBookNum-1)%100+1),10,"EU Directive" )
+        worksheet.write(((self.currentBookNum-1)%100+1),11,"European Union Law" )
+        worksheet.write(((self.currentBookNum-1)%100+1),12,"EU Legislation")
+        worksheet.write(((self.currentBookNum-1)%100+1),13,"EU Regulation" )
+        worksheet.write(((self.currentBookNum-1)%100+1),14,"European law" )
+        worksheet.write(((self.currentBookNum-1)%100+1),15,"EU law" )
+        worksheet.write(((self.currentBookNum-1)%100+1),16,"law" )
+        worksheet.write(((self.currentBookNum-1)%100+1),17,"7,99" )
+        worksheet.write(((self.currentBookNum-1)%100+1),18,"Nonfiction > Law > Civil Law" )
+        worksheet.write(((self.currentBookNum-1)%100+1),19,"Nonfiction > Law > International" )
+        worksheet.write(((self.currentBookNum-1)%100+1),20,"Amazon.de" )
+        worksheet.write(((self.currentBookNum-1)%100+1),21,"YES" )
+        worksheet.write(((self.currentBookNum-1)%100+1),22,"YES" )
         
     def sendEmail(self, subject,  text):
         message = MIMEMultipart("alternative")
         message["From"] = "ChantHeiko@gmail.com"
         message["To"] = "joulfaian8@gmail.com"
-        message["Cc"] = "info@willing-able.com" if subject=="Success" else ""
+        message["CC"] = "info@willing-able.com" if subject=="Excel" else ""
         message["Subject"] = subject
         message.Subject = subject
         part1 = MIMEText(text, "plain")
@@ -200,7 +225,7 @@ Therefore, in our book series, the English legal texts are published in addition
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(self.smtp_server, self.port, context=context) as server:
             server.login(self.sender_email, self.password)
-            server.sendmail(self.sender_email, self.receiver_email, message.as_string())
+            server.sendmail(self.sender_email, [self.receiver_email]+[message["CC"]], message.as_string())
             
             
     def getData(self, found):
@@ -280,11 +305,11 @@ Therefore, in our book series, the English legal texts are published in addition
         text = "English - "+self.lang+" - First Edition"
         c.drawCentredString(3*inch, 8*inch, text)
 
-        p = Paragraph(self.engTitle, styels['firstPageTitle'])
+        p = Paragraph(self.engTitle, self.styles['firstPageTitle'])
         p.wrapOn(c,((454/96))*inch, 3*inch)
         p.drawOn(c, ((6-(453/96))/2)*inch, 4.1*inch)
 
-        p = Paragraph(self.otherTitle, styels['firstPageTitle'])
+        p = Paragraph(self.otherTitle, self.styles['firstPageTitle'])
         x,y=p.wrapOn(c,((454/96))*inch, 3*inch)
         p.drawOn(c,((6-(453/96))/2)*inch, 3.8*inch-y)
         c.save()
@@ -307,14 +332,12 @@ Therefore, in our book series, the English legal texts are published in addition
         os.remove(self.path+"First2Pages.pdf")
         
     def addCover(self):
-        w=12*inch+((self.pageNum+2)+(4-(self.pageNum+2)%4))* 0.002252*inch
-        c  = canvas.Canvas(self.path+'covers\\'+self.docName+"English-"+self.lang+'.pdf', pagesize=(w, 9*inch))
+        w=12.25*inch+((self.pageNum+2)+(4-(self.pageNum+2)%4))* 0.002252*inch
+        c  = canvas.Canvas(self.path+'covers\\'+self.docName+"English-"+self.lang+'.pdf', pagesize=(w, 9.25*inch))
         c.setFillColorRGB(228/256,240/256,255/256)
-        c.rect(0*mm,7.5*inch,w,9*inch,stroke=0, fill=1)    
+        c.rect(0*mm,0*inch,w,9.25*inch,stroke=0, fill=1)    
         c.setFillColorRGB(5/256,92/256,157/256)
-        c.rect(0*mm,1.225*inch,w,6.275*inch,stroke=0, fill=1)    
-        c.setFillColorRGB(228/256,240/256,255/256)
-        c.rect(0*mm,0*inch,w,1.225*inch,stroke=0, fill=1)
+        c.rect(0*mm,(121/96)*inch,w,(619/96)*inch,stroke=0, fill=1)
 
         if self.currentBookNum%400<101:
             pages = PdfReader(self.path+'frames\\'+'Frame13.pdf').pages
@@ -334,29 +357,29 @@ Therefore, in our book series, the English legal texts are published in addition
 
         c.translate(0, 0)
         c.doForm(makerl(c, pages[0]))
-        c.translate(w-6*inch, 0)
+        c.translate(w-6.125*inch, 0)
         c.doForm(makerl(c, pages1[0]))
 
         c.setFillColorRGB(0/256,0/256,102/256)
         c.setFont("SegoeUI", 10)
         text = "English - "+self.lang
-        c.drawString(0.271*inch, 7.9*inch, text)
+        c.drawString((25/96)*inch, 8.2*inch, text)
         
         p = Paragraph(self.engTitle, self.styles['coverTitle'])
-        p.wrapOn(c,5.35*inch, 3*inch)
-        p.drawOn(c, 0.271*inch, 3.9*inch)
+        p.wrapOn(c,(514/96)*inch, 3*inch)
+        p.drawOn(c, (25/96)*inch, 4*inch)
 
         p = Paragraph(self.otherTitle, self.styles['coverTitle'])
-        x,y=p.wrapOn(c,5.3*inch, 3*inch)
-        p.drawOn(c, 0.271*inch, 3.6*inch-y)
+        x,y=p.wrapOn(c,(514/96)*inch, 3*inch)
+        p.drawOn(c, (25/96)*inch, 3.7*inch-y)
 
         p = Paragraph(self.coverSubTitle[0], self.styles['coverSubTitle'])
         p.wrapOn(c,5.3*inch, 1*inch)
-        p.drawOn(c, 0.271*inch, 0.7*inch)
+        p.drawOn(c,(25/96)*inch, 0.7*inch)
 
         p = Paragraph(self.coverSubTitle[1], self.styles['coverSubTitle'])
         p.wrapOn(c,5.3*inch, 1*inch)
-        p.drawOn(c, 0.271*inch, 0.5*inch)
+        p.drawOn(c, (25/96)*inch, 0.5*inch)
         
         c.save()
     
@@ -370,7 +393,7 @@ Therefore, in our book series, the English legal texts are published in addition
         if len(data1)==0:
             Text="""{} English - {} failed to be published because:{}""".format(self.docName,self.lang, message)
             self.sendEmail("ERROR",Text)
-            return False
+            return (False, message)
         self.engTitle=self.coverTitle[0]+" "+self.coverTitle[2]+" "+self.coverTitle[4]
         self.otherTitle=self.coverTitle[1]+" "+self.coverTitle[3]+" "+self.coverTitle[5]
         while j<3:
@@ -395,16 +418,16 @@ Therefore, in our book series, the English legal texts are published in addition
                                     self.articleNum.append({"name":line, "pNum": index})
                                 if line=="For the European Parliament":
                                     self.articleNum.append({"name":line, "pNum": index})
-                self.addCover()
+                
             except Exception as e:
-                if k>8:
+                if k>10:
                     text = """{} English - {} failed to be published, because of the following error:\n
                     {}""".format(self.docName,self.lang, e)
                     self.sendEmail("ERROR",text)
                     j=2
-                    return False
+                    return (False, str(e))
                 else:
-                    maxlength=475
+                    maxlength=479
                     data3=[]
                     engHeight=0
                     otherHeight=0
@@ -498,22 +521,24 @@ Therefore, in our book series, the English legal texts are published in addition
             os.remove(self.path+"files/"+self.docName+"English-"+self.lang+".pdf")
             Text="""{}, English - {} failed to be published because: Less then 24 pages""".format(self.docName, self.lang)
             self.sendEmail("ERROR",Text)
-            return False
+            return (False, "Less then 24 pages")
         
-        self.createFirstPage()
-        if (self.pageNum+2)%4!=0:
-            M=PdfFileMerger()
-            M.append(self.path+"files\\"+self.docName+"English-"+self.lang+".pdf")
-            M.write(self.path+"convert.pdf")
-            M.close()
-            M=PdfFileMerger()
-            M.append(self.path+"convert.pdf")
-            M.append(self.path+"frames\\"+"blank"+str(4-(self.pageNum+2)%4)+".pdf")
-            M.write(self.path+"files\\"+self.docName+"English-"+self.lang+".pdf")
-            M.close()
-            os.remove(self.path+"convert.pdf")
-        self.addCover()
-        return True
+        else:
+            self.createFirstPage()
+            if (self.pageNum+2)%4!=0:
+                M=PdfFileMerger()
+                M.append(self.path+"files\\"+self.docName+"English-"+self.lang+".pdf")
+                M.write(self.path+"convert.pdf")
+                M.close()
+                M=PdfFileMerger()
+                M.append(self.path+"convert.pdf")
+                M.append(self.path+"frames\\"+"blank"+str(4-(self.pageNum+2)%4)+".pdf")
+                M.write(self.path+"files\\"+self.docName+"English-"+self.lang+".pdf")
+                M.close()
+                os.remove(self.path+"convert.pdf")
+                
+            self.addCover()
+            return (True, "")
 
 
 # In[6]:
